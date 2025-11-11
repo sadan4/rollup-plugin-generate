@@ -89,7 +89,7 @@ export function generate({
           outfile,
           bundle: true,
           minify: false,
-          format: "esm",
+          format: "cjs",
           platform: "node",
           ...(watchMode
             ? {
