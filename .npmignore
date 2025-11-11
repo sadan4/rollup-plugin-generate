@@ -1,0 +1,6 @@
+src
+dist/tsconfig.build.tsbuildinfo
+test
+tsconfig.build.json
+tsconfig.json
+*.tgz

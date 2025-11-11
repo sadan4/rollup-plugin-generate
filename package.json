@@ -1,0 +1,45 @@
+{
+  "name": "rollup-plugin-generate",
+  "version": "0.0.1",
+  "description": "Generate files on the fly with Rollup.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "build": "tsc -b tsconfig.build.json",
+    "prepack": "pnpm build",
+    "prepublish": "pnpm build"
+  },
+  "keywords": [
+    "rollup-plugin",
+    "vite-plugin"
+  ],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.19.1-oidc-test.3",
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-swc": "^0.4.0",
+    "@swc/core": "^1.15.1",
+    "@types/node": "^24.10.0",
+    "@vitest/ui": "^4.0.8",
+    "rollup": "^4.53.2",
+    "vitest": "^4.0.8"
+  },
+  "dependencies": {
+    "@rollup/pluginutils": "^5.3.0",
+    "esbuild": "^0.27.0",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "rollup": "^4.0.0||^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "rollup": {
+      "optional": true
+    }
+  }
+}
