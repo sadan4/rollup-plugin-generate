@@ -90,6 +90,7 @@ export function generate({
           bundle: true,
           minify: false,
           format: "esm",
+          platform: "node",
           ...(watchMode
             ? {
                 absPaths: [...(providedOptions.absPaths ?? []), "metafile"],
