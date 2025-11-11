@@ -12,6 +12,7 @@ it("handles a simple typescript generator", async () => {
           constructor(otherThing){
               this.otherThing = otherThing;
               console.log("OtherClass created with", otherThing);
+              console.log("generated random number: 4");
           }
       }
 
