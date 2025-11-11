@@ -81,7 +81,7 @@ export function generate({
         const { watchMode } = this.meta;
         const filename = basename(id);
         const dir = dirname(id);
-        const outfile = join(tempDir, "file.mjs");
+        const outfile = join(tempDir, "file.cjs");
         const providedOptions = await getBuildOptions(id);
         const result = await esbuild.build({
           ...providedOptions,
