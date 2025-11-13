@@ -1,2 +1,2 @@
-import { bar } from "./foo.gen.js";
+import { bar } from "./foo.gen";
 console.log("The answer is:", bar);
