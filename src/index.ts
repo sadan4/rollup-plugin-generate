@@ -54,12 +54,6 @@ export interface GeneratorModule {
   generate(args: GeneratorArgs): Promise<string> | string;
 }
 
-function rethrow(e: unknown): Error {
-  return new Error(`[rollup-plugin-${PLUGIN_NAME}]: Internal Error`, {
-    cause: e,
-  });
-}
-
 export function generate({
   exclude,
   esbuildOptions: _esbuildOptions = {},
@@ -209,7 +203,7 @@ export function generate({
           },
         };
       } catch (e) {
-        this.error(rethrow(e));
+        this.error(e);
       }
     },
     async load(id): Promise<LoadResult> {
@@ -234,7 +228,7 @@ export function generate({
           code: result,
         };
       } catch (e) {
-        this.error(rethrow(e));
+        this.error(e);
       }
     },
   };
