@@ -28,7 +28,7 @@ it("handles a simple typescript generator", async () => {
     `);
 });
 
-const DTS_PATH = join(dirname, "other.gen?gen.d.ts");
+const DTS_PATH = join(dirname, "other.gen&gen.d.ts");
 
 it("generates the dts for generated files", async ({onTestFinished}) => {
     const _bundle = await testBundle(dirname, {}, { emitDts: true, }, { entryExt: ".ts" });
