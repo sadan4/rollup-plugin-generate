@@ -81,6 +81,7 @@ export function generate({
     const normalizedId = stripQueryArgs(id);
     const result = await esbuild.build({
       sourcemap: "inline",
+      sourceRoot: process.platform === "win32" ? "C:\\" : "/",
       ...providedOptions,
       entryPoints: [normalizedId],
       outfile,
