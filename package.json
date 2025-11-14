@@ -4,6 +4,7 @@
   "description": "Generate files on the fly with Rollup.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "homepage": "https://github.com/sadan4/rollup-plugin-generate",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
