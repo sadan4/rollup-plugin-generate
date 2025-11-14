@@ -1,12 +1,13 @@
 import { createFilter, type FilterPattern } from "@rollup/pluginutils";
 import type { LoadResult, Plugin, PluginContext, EmitFile, EmittedFile, ModuleInfo, ResolveIdResult, SourceDescription } from "rollup";
-import { basename, join, dirname } from "node:path";
+import { basename, join, dirname, normalize } from "node:path";
 import * as esbuild from "esbuild";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { makeRandomId } from "./random";
 import { createPrinter, isDeclarationStatement, isVariableDeclaration, isVariableDeclarationList, isVariableStatement, NewLineKind, SyntaxKind, visitEachChild, type CompilerHost, type Node, type Program, type Statement, type VariableStatement } from "typescript";
+import { generateAndWriteDts } from "./dtsBundler";
 export interface GenerateOptions {
   /**
    * if true, emit a generated .d.ts file **in the same tree as the source file** for the generated result
@@ -65,6 +66,8 @@ export interface EmitFileArgs {
 interface NormalizedEmittedFile {
   id: string;
   content: string;
+  referenceId: string;
+  ref: string;
   hasSideEffects?: SourceDescription["moduleSideEffects"];
 }
 
@@ -86,15 +89,21 @@ export interface GeneratorModule {
   generate(args: GeneratorArgs): Promise<string> | string;
 }
 
-class VirtualFileManager {
+/**
+ * @internal
+ */
+export class VirtualFileManager {
   private files = new Map<string, NormalizedEmittedFile>();
   public constructor() { }
-  public register({ extension = "ts", nameHint = "", ...rest }: EmitFileArgs, baseDir: string): string {
+  public register({ extension = "ts", nameHint = "", ...rest }: EmitFileArgs, id: string): string {
+    const baseDir = dirname(id);
     const ref = makeRandomId();
     const name = `${ref}${nameHint ? `_${nameHint}` : ""}.${extension}`;
     this.files.set(ref, {
       ...rest,
       id: join(baseDir, name),
+      referenceId: id,
+      ref,
     });
     return ref;
   }
@@ -113,7 +122,16 @@ class VirtualFileManager {
         [PLUGIN_NAME]: SYM_VIRTUAL,
         [SYM_VIRTUAL_KEY]: ref,
       }
-    };
+    }
+  }
+  public generatedFilesFromMainId(id: string): NormalizedEmittedFile[] {
+    return this.files.values()
+      .filter((file) => file.referenceId === id)
+      .toArray();
+  }
+  public hasGeneratedFiles(id: string): boolean {
+    return this.files.values()
+      .some(file => file.referenceId === id);
   }
   public shouldLoadVirtualFile(ctx: PluginContext, id: string): boolean {
     const meta = ctx.getModuleInfo(id)?.meta ?? {};
@@ -140,7 +158,7 @@ class VirtualFileManager {
     if (!this.files.has(ref)) {
       throw new Error(`could not find virtual file with ref ${ref}`);
     }
-    return this.files.get(ref)?.content;
+    return this.files.get(ref)!.content;
   }
 }
 
@@ -200,7 +218,7 @@ export function generate({
     }
     let requireUrl =
       process.platform === "win32" ? pathToFileURL(outfile).href : outfile;
-    let mod = (await import(outfile)) as GeneratorModule;
+    let mod = (await import(requireUrl)) as GeneratorModule;
     // try to unwrap cjs default export
     if (Object.keys(mod).length === 1 && "default" in mod) {
       mod = (mod as any).default;
@@ -221,7 +239,7 @@ export function generate({
       filename,
       dirname: dir,
       watch: (path) => this.addWatchFile(path),
-      emitFile: (args) => virtualFiles.register(args, dir),
+      emitFile: (args) => virtualFiles.register(args, stripQueryArgs(id)),
     };
     let transformedCode;
     try {
@@ -230,65 +248,6 @@ export function generate({
       throw new Error(`Failed to generate module ${id}`, { cause: e });
     }
     return transformedCode;
-  }
-  async function generateAndWriteDts(
-    this: PluginContext,
-    id: string,
-    code: string,
-  ) {
-    const ts = await import("typescript");
-    const outputFiles = new Map<string, string>();
-    const reverseMap = virtualFiles.reverseMap();
-    const host = ts.createCompilerHost({
-      declaration: true,
-      emitDeclarationOnly: true,
-      paths: virtualFiles.tsconfigPaths(),
-      traceResolution: true,
-    });
-    const origReadFile = host.readFile;
-    const origFileExists = host.fileExists;
-    host.fileExists = (filename) => {
-      if (reverseMap.has(filename)) {
-        return true;
-      }
-      return origFileExists(filename);
-    };
-
-    // !(filename.includes("undici-types") || filename.includes("/@types/node/") || filename.includes("/typescript/lib"))
-    host.readFile = (filename) => {
-      if (filename === id) {
-        return code;
-      } else if (reverseMap.has(filename)) {
-        const ref = reverseMap.get(filename)!;
-        return virtualFiles.refToContent(ref);
-      } else {
-        return origReadFile(filename);
-      }
-    };
-    host.writeFile = (filename, contents) => {
-      outputFiles.set(filename, contents);
-    };
-    const program = ts.createProgram(
-      [id],
-      {
-        declaration: true,
-        emitDeclarationOnly: true,
-        paths: virtualFiles.tsconfigPaths(),
-        traceResolution: true,
-      },
-      host,
-    );
-    const generatedDts = generateDts(program, host, id, virtualFiles);
-    program.emit();
-    const outputDts = id.replace(/\.[mc]?[jt]sx?$/, ".d.ts");
-    const dts = outputFiles.get(outputDts);
-    if (!dts) {
-      this.warn("failed to generate .d.ts file");
-      return;
-    } else {
-      const outputDtsWithThing = id.replace(/\.[mc]?[jt]sx?$/, "&gen.d.ts");
-      await writeFile(outputDtsWithThing, dts);
-    }
   }
   return [{
     name: PLUGIN_NAME,
@@ -334,6 +293,7 @@ export function generate({
             this,
             stripQueryArgs(resolvedId),
             result,
+            virtualFiles,
           );
         }
         return {
@@ -358,28 +318,6 @@ export function generate({
     },
   }
   ];
-}
-
-function generateDts(program: Program, host: CompilerHost, entryPoint: string, virt: VirtualFileManager): string | void {
-  const sourceFile = program.getSourceFile(entryPoint);
-  if (!sourceFile) {
-    throw new Error(`could not find source file for ${entryPoint}`);
-  }
-  let res = [];
-  const tc = program.getTypeChecker();
-  const moduleSymbol = tc.getSymbolAtLocation(sourceFile);
-  if (!moduleSymbol) {
-    throw new Error(`could not get module symbol for ${entryPoint}`);
-  }
-  const topLevelExports = tc.getExportsOfModule(moduleSymbol);
-  const printer = createPrinter({ newLine: NewLineKind.LineFeed });
-  // TODO: look into https://github.com/TypeStrong/dts-bundle/tree/master
-  function assert(condition: any, msg: string): asserts condition {
-    if (!condition) {
-      throw new Error(msg);
-    }
-  }
-  return undefined;
 }
 
 export default generate;

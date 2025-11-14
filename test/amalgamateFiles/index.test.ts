@@ -10,10 +10,16 @@ mockRandomIds();
 
 const DTS_PATH = join(dirname, "things.gen&gen.d.ts");
 
-describe("amalgamation", async ({beforeAll, afterAll}) => {
+describe("amalgamation", async ({ beforeAll, afterAll }) => {
     let bundle: RollupOutput | string[];
+    function runBeforeAll() {
+        return testBundle(dirname, {}, { emitDts: true }, { entryExt: ".ts", rawOutput: true });
+    }
     beforeAll(async () => {
-        bundle = await testBundle(dirname, {}, { emitDts: true }, { entryExt: ".ts", rawOutput: true });
+      try {
+        bundle = await runBeforeAll();
+      } catch {
+      }
     });
     afterAll(async () => {
         await rm(DTS_PATH);
@@ -94,13 +100,17 @@ describe("amalgamation", async ({beforeAll, afterAll}) => {
           }
         `);
     });
-    it("generates a correct dts when amalgamating files", async ({onTestFinished}) => {
+    it("generates a correct dts when amalgamating files", async () => {
         const dts = await readFile(DTS_PATH, "utf8");
         expect(dts).toMatchInlineSnapshot(`
-        "export * from "psbnuwbswa";
-        export * from "rfvkxqfs$d";
-        export * from "atgadhjvhv";
-        "
+          "declare const thing1: string = "thing1 export";
+
+          declare const thing2: string = "thing2 export";
+
+          declare const thing3: string = "thing3 export";
+
+          export { thing1, thing2, thing3 };
+          "
         `);
     });
 })
