@@ -80,6 +80,7 @@ export function generate({
     const providedOptions = await getBuildOptions(id);
     const normalizedId = stripQueryArgs(id);
     const result = await esbuild.build({
+      sourcemap: "inline",
       ...providedOptions,
       entryPoints: [normalizedId],
       outfile,
