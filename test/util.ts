@@ -4,6 +4,7 @@ import swc from "@rollup/plugin-swc";
 import { nodeResolve } from "@rollup/plugin-node-resolve";
 import { generate, type GenerateOptions } from "../src";
 import commonjs from "@rollup/plugin-commonjs";
+import { vi } from "vitest";
 
 type SWCOptions = (Parameters<typeof swc>[0] & {})["swc"];
 
@@ -43,11 +44,10 @@ export async function testBundle(
                 extensions: JS_EXTENSIONS
             })
         ],
+        treeshake: "recommended",
         ...rollupOptions
     });
-    const generated = await bundle.generate({
-        dir: undefined,
-    });
+    const generated = await bundle.generate({});
     if (rawOutput) {
         return generated as any;
     } else {
@@ -68,4 +68,16 @@ export function createCJSTestBundle(dir: string, entryExt: `.${string}` = ".js")
         entryExt,
         }
     );
+}
+
+export function mockRandomIds() {
+    vi.mock(import("../src/random"), async () => {
+        const { default: randomIds } = await import("./randomIds.json");
+        let cur = 0;
+        return {
+            makeRandomId() {
+                return randomIds[cur++] || (() => { throw new Error("out of random numbers") })();
+            }
+        }
+    })
 }
