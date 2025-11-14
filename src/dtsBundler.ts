@@ -1,94 +1,72 @@
 import type { PluginContext, ResolveIdResult } from "rollup";
 import type { VirtualFileManager } from ".";
-import { normalize, resolve } from "path";
-import { writeFile } from "fs/promises";
-let ts: typeof import("typescript");
-export async function generateDtsViaRollup(
+import { normalize } from "node:path";
+import { writeFile } from "node:fs/promises";
+import type { CompilerHost } from "typescript";
+
+interface DTSBundle {
+    entry: string;
+    files: Map<string, string>;
+    aliases: Map<string, string>;
+}
+
+async function generateDtsViaRollup(
     ctx: PluginContext,
-    input: string,
-    rootDts: string,
-    virtualFiles: VirtualFileManager,
+    {entry, files, aliases}: DTSBundle,
 ): Promise<string> {
     const {rollup} = await import("rollup");
     const {dts} = await import("rollup-plugin-dts");
-    const reverseMap = virtualFiles.reverseMap();
-	function _readFile(
-		path: string,
-		options?: { encoding?: null; flag?: string | number; signal?: AbortSignal }
-	): Promise<Uint8Array>;
-	function _readFile(
-		path: string,
-		options?: { encoding: BufferEncoding; flag?: string | number; signal?: AbortSignal }
-	): Promise<string>;
-	function _readFile(
-		path: string,
-		options?: { encoding?: BufferEncoding | null; flag?: string | number; signal?: AbortSignal }
-	): Promise<string | Uint8Array> {
-        const resolvedPath = resolve(path);
-        if (resolvedPath === resolve(input)) {
-            return resolveString(rootDts);
-        } else if (reverseMap.has(resolvedPath)) {
-            const ref = reverseMap.get(resolvedPath)!;
-            const content = virtualFiles.refToContent(ref);
-            return resolveString(content);
-        }
-        return ctx.fs.readFile(path, options as any);
-        function resolveString(code: string): Promise<string | Uint8Array> {
-            if (options?.encoding) {
-                return Promise.resolve(code);
-            } else {
-                const arr: Uint8Array = Buffer.from(code);
-                return Promise.resolve(arr);
-            }
-        }
-    }
-    const tsconfigPaths = virtualFiles.tsconfigPaths();
     const bundle = await rollup({
         fs: {
             ...ctx.fs,
-            readFile: _readFile,
         },
-        input,
+        input: entry,
         plugins: [
             {
-                name: "rollup-plugin-generate:virtual-dts-bundler",
-                resolveId(source, importer, options): ResolveIdResult {
-                    if (source === input) {
+                name: "rollup-plugin-generate:virtual-dts-resolver",
+                async resolveId(source, importer, options): Promise<ResolveIdResult> {
+                    if (source === entry) {
                         return source;
                     }
                     if (!importer || options.isEntry) {
                         return;
                     }
-                    if (source in tsconfigPaths) {
-                        const [target] = tsconfigPaths[source]!;
+                    if (aliases.has(source)) {
+                        const resolved = aliases.get(source)!;
                         return {
-                            id: target!,
+                            id: resolved,
                             external: false,
+                        }
+                    } else {
+                        const resolvedResult = await this.resolve(source, importer, { skipSelf: true, ...options });
+                        if (resolvedResult) {
+                            return {
+                                ...resolvedResult,
+                                external: "relative",
+                            }
                         }
                     }
                 },
                 load(id) {
-                    if (id === input) {
-                        return rootDts;
+                    if (files.has(id)) {
+                        return files.get(id)!;
                     }
-                    if (reverseMap.has(id)) {
-                        const ref = reverseMap.get(id)!;
-                        const content = virtualFiles.refToContent(ref);
-                        return content;
-                    }
+                    this.error(`trying to load non-virtual file during dts bundle ${id}`)
                 }
             },
             dts(),
         ]
     });
-    const {output} = await bundle.generate({
-    });
+    const {output} = await bundle.generate({});
     if (output.length !== 1) {
         ctx.error("failed to generate .d.ts bundle for generated file");
     }
     const [{code}] = output;
     return code;
 }
+/**
+ * @internal
+ */
 export async function generateAndWriteDts(
   this: PluginContext,
   id: string,
@@ -96,59 +74,48 @@ export async function generateAndWriteDts(
   virtualFiles: VirtualFileManager
 ) {
     try {
-        ts ??= await import("typescript");
-        let generatedDts = generateDtsNoBundle(this, id, code, virtualFiles);
+        let generatedFs = await generateDtsNoBundle(this, id, code, virtualFiles);
         const mainDtsPath = pathToDtsPath(id);
         let result: string = "";
         if (!virtualFiles.hasGeneratedFiles(id)) {
-            result = generatedDts.get(mainDtsPath) ?? "";
+            result = generatedFs.get(mainDtsPath) ?? "";
         } else {
-            const dtsInputPath = normalize(id.replace(/\.[mc]?[jt]sx?$/, ".d.ts"));
-            result = await generateDtsViaRollup(this, dtsInputPath, generatedDts, virtualFiles);
+            result = await generateDtsViaRollup(this, {
+                    entry: mainDtsPath,
+                    files: generatedFs,
+                    aliases: new Map(
+                        Array.from(virtualFiles.files.entries())
+                            .map(([ref, {id}]) => {
+                                return [ref, pathToDtsPath(normalize(id))];
+                            })
+                    ),
+                });
         }
         const dtsOutputPath = id.replace(/\.[mc]?[jt]sx?$/, "&gen.d.ts");
         await writeFile(dtsOutputPath, result);
     } catch (e) {
         this.error(e);
     }
-    return;
 }
 
-function generateDtsNoBundle(ctx: PluginContext, id: string, code: string, virtualFiles: VirtualFileManager) {
+async function generateDtsNoBundle(ctx: PluginContext, id: string, code: string, virtualFiles: VirtualFileManager) {
+    const ts = await import("typescript");
     const host = ts.createCompilerHost({
         declaration: true,
         emitDeclarationOnly: true,
     });
-    const vfs = new Map<string, string>();
-    const origRead = host.readFile;
-    const origExists = host.fileExists;
-    const reverseMap = virtualFiles.reverseMap();
-    host.fileExists = (fileName) => {
-        if (reverseMap.has(normalize(fileName))) {
-            return true;
-        }
-        return origExists(fileName);
+    const vfs = setupHostVFS(host);
+    for (const [fileName, ref] of virtualFiles.reverseMap()) {
+        const content = virtualFiles.refToContent(ref);
+        vfs.set(fileName, content);
     }
-    host.readFile = (fileName) => {
-        if (normalize(fileName) === normalize(id)) {
-            return code;
-        } else if (reverseMap.has(normalize(fileName))) {
-            const ref = reverseMap.get(normalize(fileName))!;
-            return virtualFiles.refToContent(ref);
-        } else {
-            return origRead(fileName);
-        }
-    }
-    host.writeFile = (fileName, contents) => {
-        vfs.set(normalize(fileName), contents);
-    }
+    vfs.set(normalize(id), code);
     const program = ts.createProgram(
         [id],
         {
             declaration: true,
             emitDeclarationOnly: true,
             paths: virtualFiles.tsconfigPaths(),
-            traceResolution: true,
         },
         host,
     );
@@ -158,4 +125,25 @@ function generateDtsNoBundle(ctx: PluginContext, id: string, code: string, virtu
 
 function pathToDtsPath(path: string) {
     return path.replace(/\.[mc]?[jt]sx?$/, ".d.ts");
+}
+
+function setupHostVFS(host: CompilerHost, fallbackToSystem = true): Map<string, string> {
+    const vfs = new Map<string, string>();
+    const originalReadFile = host.readFile;
+    const originalFileExists = host.fileExists;
+    host.writeFile = (fileName, contents) => {
+        vfs.set(normalize(fileName), contents);
+    }
+    host.readFile = (fileName) => {
+        const n = normalize(fileName);
+        if (vfs.has(n)) {
+            return vfs.get(n);
+        } else if (fallbackToSystem) {
+            return originalReadFile(fileName);
+        }
+    }
+    host.fileExists = (fileName) => {
+        return vfs.has(normalize(fileName)) || (fallbackToSystem && originalFileExists(fileName));
+    }
+    return vfs;
 }

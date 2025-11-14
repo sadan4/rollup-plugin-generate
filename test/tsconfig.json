@@ -1,15 +1,16 @@
 {
+    "extends": "../tsconfig.json",
     "compilerOptions": {
         "module": "esnext",
         "moduleResolution": "bundler",
         "strict": true,
         "declaration": true,
         "outDir": "dist",
-        "target": "es2022",
-        "lib": ["es2022"],
+        "target": "esnext",
+        "lib": ["ESNext"],
+        "noEmit": true,
         "useUnknownInCatchVariables": false,
     },
-    "files": ["src/index.ts"],
     "exclude": [
         "node_modules"
     ]

@@ -1,13 +1,15 @@
 import { createFilter, type FilterPattern } from "@rollup/pluginutils";
-import type { LoadResult, Plugin, PluginContext, EmitFile, EmittedFile, ModuleInfo, ResolveIdResult, SourceDescription } from "rollup";
-import { basename, join, dirname, normalize } from "node:path";
+import type { LoadResult, Plugin, PluginContext, ResolveIdResult, SourceDescription } from "rollup";
+import { basename, join, dirname } from "node:path";
 import * as esbuild from "esbuild";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { makeRandomId } from "./random";
-import { createPrinter, isDeclarationStatement, isVariableDeclaration, isVariableDeclarationList, isVariableStatement, NewLineKind, SyntaxKind, visitEachChild, type CompilerHost, type Node, type Program, type Statement, type VariableStatement } from "typescript";
 import { generateAndWriteDts } from "./dtsBundler";
+import { customAlphabet } from "nanoid/non-secure";
+
+const makeRandomId = customAlphabet("abcdefghijklmnopqrstuvwxyz_$", 10);
+
 export interface GenerateOptions {
   /**
    * if true, emit a generated .d.ts file **in the same tree as the source file** for the generated result
@@ -63,7 +65,10 @@ export interface EmitFileArgs {
   content: string;
 }
 
-interface NormalizedEmittedFile {
+/**
+ * @internal
+ */
+export interface NormalizedEmittedFile {
   id: string;
   content: string;
   referenceId: string;
@@ -93,13 +98,16 @@ export interface GeneratorModule {
  * @internal
  */
 export class VirtualFileManager {
-  private files = new Map<string, NormalizedEmittedFile>();
+  private _files = new Map<string, NormalizedEmittedFile>();
+  public get files(): ReadonlyMap<string, NormalizedEmittedFile> {
+    return this._files;
+  }
   public constructor() { }
   public register({ extension = "ts", nameHint = "", ...rest }: EmitFileArgs, id: string): string {
     const baseDir = dirname(id);
     const ref = makeRandomId();
     const name = `${ref}${nameHint ? `_${nameHint}` : ""}.${extension}`;
-    this.files.set(ref, {
+    this._files.set(ref, {
       ...rest,
       id: join(baseDir, name),
       referenceId: id,
@@ -108,13 +116,13 @@ export class VirtualFileManager {
     return ref;
   }
   public isVirtualFile(ref: any): boolean {
-    return this.files.has(ref);
+    return this._files.has(ref);
   }
   public resolveVirtualFile(ctx: PluginContext, ref: string): ResolveIdResult {
-    if (!this.files.has(ref)) {
+    if (!this._files.has(ref)) {
       ctx.error(`could not resolve virtual file with id ${ref}`);
     }
-    const file = this.files.get(ref)!;
+    const file = this._files.get(ref)!;
     return {
       id: file.id,
       moduleSideEffects: file.hasSideEffects ?? null,
@@ -125,12 +133,11 @@ export class VirtualFileManager {
     }
   }
   public generatedFilesFromMainId(id: string): NormalizedEmittedFile[] {
-    return this.files.values()
+    return Array.from(this._files.values())
       .filter((file) => file.referenceId === id)
-      .toArray();
   }
   public hasGeneratedFiles(id: string): boolean {
-    return this.files.values()
+    return Array.from(this._files.values())
       .some(file => file.referenceId === id);
   }
   public shouldLoadVirtualFile(ctx: PluginContext, id: string): boolean {
@@ -143,22 +150,22 @@ export class VirtualFileManager {
     if (!this.isVirtualFile(ref)) {
       ctx.error(`could not load virtual file with id ${id}`);
     }
-    const file = this.files.get(ref)!;
+    const file = this._files.get(ref)!;
     return {
       code: file.content,
     };
   }
   public tsconfigPaths(): Record<string, string[]> {
-    return Object.fromEntries(this.files.entries().map(([key, { id }]) => [key, [id]]));
+    return Object.fromEntries(Array.from(this._files.entries()).map(([key, { id }]) => [key, [id]]));
   }
   public reverseMap(): Map<string, string> {
-    return new Map(this.files.entries().map(([key, { id }]) => [id, key]));
+    return new Map(Array.from(this._files.entries()).map(([key, { id }]) => [id, key]));
   }
   public refToContent(ref: string) {
-    if (!this.files.has(ref)) {
+    if (!this._files.has(ref)) {
       throw new Error(`could not find virtual file with ref ${ref}`);
     }
-    return this.files.get(ref)!.content;
+    return this._files.get(ref)!.content;
   }
 }
 

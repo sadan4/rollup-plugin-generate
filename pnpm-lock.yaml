@@ -14,17 +14,17 @@ importers:
       esbuild:
         specifier: ^0.27.0
         version: 0.27.0
-      magic-string:
-        specifier: ^0.30.21
-        version: 0.30.21
       nanoid:
         specifier: ^5.1.6
         version: 5.1.6
+      rollup:
+        specifier: ^4.0.0||^3.0.0
+        version: 4.53.2
       rollup-plugin-dts:
         specifier: ^6.2.3
         version: 6.2.3(rollup@4.53.2)(typescript@5.9.3)
       typescript:
-        specifier: ^5.9.3
+        specifier: ^5.7.3
         version: 5.9.3
     devDependencies:
       '@rollup/plugin-commonjs':
@@ -39,21 +39,12 @@ importers:
       '@swc/core':
         specifier: ^1.15.1
         version: 1.15.1
-      '@types/babel__code-frame':
-        specifier: ^7.0.6
-        version: 7.0.6
-      '@types/estree':
-        specifier: ^1.0.8
-        version: 1.0.8
       '@types/node':
         specifier: ^24.10.0
         version: 24.10.0
       '@vitest/ui':
         specifier: ^4.0.8
         version: 4.0.8(vitest@4.0.8)
-      rollup:
-        specifier: ^4.53.2
-        version: 4.53.2
       vitest:
         specifier: ^4.0.8
         version: 4.0.8(@types/node@24.10.0)(@vitest/ui@4.0.8)
@@ -610,9 +601,6 @@ packages:
 
   '@swc/types@0.1.25':
     resolution: {integrity: sha512-iAoY/qRhNH8a/hBvm3zKj9qQ4oc2+3w1unPJa2XvTK3XjeLXtzcCingVPw/9e5mn1+0yPqxcBGp9Jf0pkfMb1g==}
-
-  '@types/babel__code-frame@7.0.6':
-    resolution: {integrity: sha512-Anitqkl3+KrzcW2k77lRlg/GfLZLWXBuNgbEcIOU6M92yw42vsd3xV/Z/yAHEj8m+KUjL6bWOVOFqX8PFPJ4LA==}
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
@@ -1262,8 +1250,6 @@ snapshots:
   '@swc/types@0.1.25':
     dependencies:
       '@swc/counter': 0.1.3
-
-  '@types/babel__code-frame@7.0.6': {}
 
   '@types/chai@5.2.3':
     dependencies:
