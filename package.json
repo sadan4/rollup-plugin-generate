@@ -9,7 +9,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "build": "tsc -b",
+    "build": "tsc -b && tsc-alias -f",
     "prepack": "pnpm build",
     "prepublish": "pnpm build"
   },
@@ -27,6 +27,7 @@
     "@swc/core": "^1.15.1",
     "@types/node": "^24.10.0",
     "@vitest/ui": "^4.0.8",
+    "tsc-alias": "^1.8.16",
     "vitest": "^4.0.8"
   },
   "dependencies": {
