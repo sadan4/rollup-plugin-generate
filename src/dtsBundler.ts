@@ -98,12 +98,16 @@ export async function generateAndWriteDts(
     try {
         ts ??= await import("typescript");
         let generatedDts = generateDtsNoBundle(this, id, code, virtualFiles);
-        if (virtualFiles.hasGeneratedFiles(id)) {
+        const mainDtsPath = pathToDtsPath(id);
+        let result: string = "";
+        if (!virtualFiles.hasGeneratedFiles(id)) {
+            result = generatedDts.get(mainDtsPath) ?? "";
+        } else {
             const dtsInputPath = normalize(id.replace(/\.[mc]?[jt]sx?$/, ".d.ts"));
-            generatedDts = await generateDtsViaRollup(this, dtsInputPath, generatedDts, virtualFiles);
+            result = await generateDtsViaRollup(this, dtsInputPath, generatedDts, virtualFiles);
         }
         const dtsOutputPath = id.replace(/\.[mc]?[jt]sx?$/, "&gen.d.ts");
-        await writeFile(dtsOutputPath, generatedDts);
+        await writeFile(dtsOutputPath, result);
     } catch (e) {
         this.error(e);
     }
@@ -149,13 +153,9 @@ function generateDtsNoBundle(ctx: PluginContext, id: string, code: string, virtu
         host,
     );
     program.emit();
-    const outputDtsPath = normalize(id.replace(/\.[mc]?[jt]sx?$/, ".d.ts"));
-    const dts = vfs.get(outputDtsPath);
-    if (!dts) {
-        ctx.warn("failed to generate .d.ts file");
-        return "";
-    } else {
-        // const outputDtsPath = id.replace(/\.[mc]?[jt]sx?$/, "&gen.d.ts");
-        return dts;
-    }
+    return vfs;
+}
+
+function pathToDtsPath(path: string) {
+    return path.replace(/\.[mc]?[jt]sx?$/, ".d.ts");
 }
