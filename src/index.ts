@@ -95,6 +95,12 @@ export interface GeneratorModule {
 }
 
 /**
+ * export this from your generator module to set the moduleSideEffects of the generated module
+ * @default null
+ */
+export type GeneratorExportModuleSideEffects = SourceDescription["moduleSideEffects"];
+
+/**
  * @internal
  */
 export class VirtualFileManager {
@@ -185,7 +191,7 @@ export function generate({
       return _esbuildOptions(id);
     }
   }
-  async function transform(this: PluginContext, id: string) {
+  async function transform(this: PluginContext, id: string): Promise<SourceDescription> {
     const tempDir = await mkdtemp(
       join(tmpdir(), `rollup-plugin-${PLUGIN_NAME}.`),
     );
@@ -248,13 +254,20 @@ export function generate({
       watch: (path) => this.addWatchFile(path),
       emitFile: (args) => virtualFiles.register(args, stripQueryArgs(id)),
     };
-    let transformedCode;
+    let transformedCode: string;
+    let moduleSideEffects: SourceDescription["moduleSideEffects"] = null;
     try {
       transformedCode = await Promise.resolve(mod.generate(opts));
+      if ("moduleSideEffects" in mod) {
+        moduleSideEffects = (mod as any).moduleSideEffects;
+      }
     } catch (e) {
       throw new Error(`Failed to generate module ${id}`, { cause: e });
     }
-    return transformedCode;
+    return {
+      code: transformedCode,
+      moduleSideEffects,
+    }
   }
   return [{
     name: PLUGIN_NAME,
@@ -299,13 +312,11 @@ export function generate({
           await generateAndWriteDts.call(
             this,
             stripQueryArgs(resolvedId),
-            result,
+            result.code,
             virtualFiles,
           );
         }
-        return {
-          code: result,
-        };
+        return result;
       } catch (e) {
         this.error(e);
       }
