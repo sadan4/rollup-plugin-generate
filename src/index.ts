@@ -88,6 +88,7 @@ export interface GeneratorArgs {
    * @returns a unique import specifier that references this file
    */
   emitFile(args: EmitFileArgs): string;
+  emitChunk(args: Omit<EmitFileArgs, "hasSideEffects">): string;
 }
 
 export interface GeneratorModule {
@@ -120,6 +121,9 @@ export class VirtualFileManager {
       ref,
     });
     return ref;
+  }
+  public registerEmitFile(ref: string, file: NormalizedEmittedFile) {
+    this._files.set(ref, file);
   }
   public isVirtualFile(ref: any): boolean {
     return this._files.has(ref);
@@ -253,6 +257,21 @@ export function generate({
       dirname: dir,
       watch: (path) => this.addWatchFile(path),
       emitFile: (args) => virtualFiles.register(args, stripQueryArgs(id)),
+      emitChunk: (args) => {
+        const ref = virtualFiles.register(args, stripQueryArgs(id));
+        const file = virtualFiles.files.get(ref)!;
+        const emitRef = this.emitFile({
+          type: "chunk",
+          id: ref,
+          importer: stripQueryArgs(id),
+          name: args.nameHint,
+        })
+        virtualFiles.registerEmitFile(emitRef, {
+          ...file,
+          ref: emitRef,
+        });
+        return emitRef;
+      }
     };
     let transformedCode: string;
     let moduleSideEffects: SourceDescription["moduleSideEffects"] = null;
