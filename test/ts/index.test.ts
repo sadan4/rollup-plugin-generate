@@ -37,7 +37,8 @@ it("generates the dts for generated files", async ({onTestFinished}) => {
     })
     const dts = await readFile(DTS_PATH, "utf-8");
     expect(dts).toMatchInlineSnapshot(`
-      "export declare class OtherClass {
+      "/* eslint-disable */
+      export declare class OtherClass {
           private otherThing;
           constructor(otherThing: string);
       }

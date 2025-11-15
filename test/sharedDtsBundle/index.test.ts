@@ -42,7 +42,8 @@ describe("DTS bundling with shared types", async ({ beforeAll, afterAll }) => {
         const bundle: RollupOutput | string[] = await testBundle(dirname, {}, { emitDts: true }, { entryExt: ".ts" });
         const dts = await readFile(DTS_PATH, "utf8");
         expect(dts).toMatchInlineSnapshot(`
-          "import { MyInterface } from './shared.ts';
+          "/* eslint-disable */
+          import { MyInterface } from './shared.ts';
 
           declare const thing1: string;
 

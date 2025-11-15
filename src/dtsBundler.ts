@@ -71,7 +71,8 @@ export async function generateAndWriteDts(
   this: PluginContext,
   id: string,
   code: string,
-  virtualFiles: VirtualFileManager
+  virtualFiles: VirtualFileManager,
+  banner: string = "",
 ) {
     try {
         let generatedFs = await generateDtsNoBundle(this, id, code, virtualFiles);
@@ -92,6 +93,9 @@ export async function generateAndWriteDts(
                 });
         }
         const dtsOutputPath = id.replace(/\.[mc]?[jt]sx?$/, "&gen.d.ts");
+        if (banner) {
+            result = `${banner}\n${result}`;
+        }
         await writeFile(dtsOutputPath, result);
     } catch (e) {
         this.error(e);

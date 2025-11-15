@@ -38,7 +38,8 @@ describe("amalgamation with emitChunk", () => {
         const dts = await readFile(DTS_PATH, "utf8");
 
         expect(dts).toMatchInlineSnapshot(`
-          "declare const thing1: string;
+          "/* eslint-disable */
+          declare const thing1: string;
 
           declare const thing2: string;
 

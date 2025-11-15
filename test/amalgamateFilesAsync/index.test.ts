@@ -35,7 +35,8 @@ describe("amalgamation async imports", () => {
     onTestFinished(() => rm(DTS_PATH));
     const dts = await readFile(DTS_PATH, "utf-8");
     expect(dts).toMatchInlineSnapshot(`
-      "declare const thing1: string;
+      "/* eslint-disable */
+      declare const thing1: string;
 
       declare const thing2: string;
 

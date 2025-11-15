@@ -34,7 +34,8 @@ it("generates dts for async imports", async ({onTestFinished}) => {
         await rm(DTS_PATH);
     });
     expect(dts).toMatchInlineSnapshot(`
-      "export declare const thingExport: string;
+      "/* eslint-disable */
+      export declare const thingExport: string;
       export declare const otherThingExport: string | number;
       "
     `);

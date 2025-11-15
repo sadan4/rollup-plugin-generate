@@ -28,6 +28,11 @@ export interface GenerateOptions {
   | esbuild.BuildOptions
   | ((id: string) => Promise<esbuild.BuildOptions> | esbuild.BuildOptions);
   /**
+   * Banner to add to the top of generated .d.ts files
+   * @default /* eslint-disable *\/
+   */
+  dtsBanner?: string;
+  /**
    * Evalualate the generator in a worker
    * @default false
    */
@@ -183,6 +188,7 @@ export function generate({
   exclude,
   esbuildOptions: _esbuildOptions = {},
   emitDts = true,
+  dtsBanner = "/* eslint-disable */",
 }: GenerateOptions = {}): Plugin<GenerateOptions>[] {
   const matcher = createFilter(INCLUDE_REGEX, exclude);
   const virtualFiles = new VirtualFileManager();
@@ -227,8 +233,7 @@ export function generate({
       if (!metafile) {
         this.error("ESBuild Metafile is undefined");
       }
-      // typescript is dumb and doesnt recognize the above `this.error` as never returning, depsite it being correctly typed
-      const { outputs } = metafile as esbuild.Metafile;
+      const { outputs } = metafile;
       for (const path of Object.keys(outputs)) {
         this.addWatchFile(path);
       }
@@ -333,6 +338,7 @@ export function generate({
             stripQueryArgs(resolvedId),
             result.code,
             virtualFiles,
+            dtsBanner
           );
         }
         return result;
