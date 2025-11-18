@@ -372,7 +372,9 @@ function inspectBrk(): void {
   process.kill(process.pid, "SIGUSR1");
   let spinning = true;
   while (spinning) {
-    debugger;
+    if (!(Math.random() || Math.random())) {
+        spinning = false;
+    }
   }
 }
 
