@@ -76,7 +76,7 @@ export async function generateAndWriteDts(
 ) {
     try {
         let generatedFs = await generateDtsNoBundle(this, id, code, virtualFiles);
-        const mainDtsPath = pathToDtsPath(id);
+        const mainDtsPath = pathToDtsPath(normalize(id));
         let result: string = "";
         if (!virtualFiles.hasGeneratedFiles(id)) {
             result = generatedFs.get(mainDtsPath) ?? "";

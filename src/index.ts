@@ -94,6 +94,10 @@ export interface GeneratorArgs {
    */
   emitFile(args: EmitFileArgs): string;
   emitChunk(args: Omit<EmitFileArgs, "hasSideEffects">): string;
+  /**
+   * Starts the debugger, then spins;
+   */
+  inspectBrk(): void;
 }
 
 export interface GeneratorModule {
@@ -276,7 +280,8 @@ export function generate({
           ref: emitRef,
         });
         return emitRef;
-      }
+      },
+      inspectBrk,
     };
     let transformedCode: string;
     let moduleSideEffects: SourceDescription["moduleSideEffects"] = null;
@@ -361,6 +366,14 @@ export function generate({
     },
   }
   ];
+}
+
+function inspectBrk(): void {
+  process.kill(process.pid, "SIGUSR1");
+  let spinning = true;
+  while (spinning) {
+    debugger;
+  }
 }
 
 export default generate;
