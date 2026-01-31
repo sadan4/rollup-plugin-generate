@@ -1,4 +1,4 @@
-import { addExtension, createFilter, makeLegalIdentifier, type FilterPattern } from "@rollup/pluginutils";
+import { createFilter, makeLegalIdentifier, type FilterPattern } from "@rollup/pluginutils";
 import type { LoadResult, Plugin, PluginContext, ResolveIdResult, SourceDescription } from "rollup";
 import { basename, join, dirname, resolve } from "node:path";
 import * as esbuild from "esbuild";
@@ -225,7 +225,7 @@ export function generate({
   cache: { watch: watchCacheMode = "filesystem", build: buildCacheMode = "off" } = {},
 }: GenerateOptions = {}): Plugin<GenerateOptions>[] {
   const matcher = createFilter(INCLUDE_REGEX, exclude);
-  let virtualFiles: VirtualFileManager;
+  const virtualFiles: VirtualFileManager = new VirtualFileManager();
   function _emitFile(args: EmitFileArgs, normalizedId: string): string {
     const refId = virtualFiles.register(args, normalizedId);
     return refId;
@@ -284,7 +284,7 @@ export function generate({
     const outfile = join(tempDir, "file.cjs");
     const providedOptions = await getBuildOptions(id);
     const normalizedId = stripQueryArgs(id);
-    const cacheFilePath = join(resolvedCacheDirBase, addExtension(makeLegalIdentifier(normalizedId), ".json"));
+    const cacheFilePath = join(resolvedCacheDirBase, `${makeLegalIdentifier(normalizedId)}.json`);
     const usedCacheAlready = usedCacheFiles.has(cacheFilePath);
     using _ = defer(() => {
       usedCacheFiles.add(cacheFilePath);
@@ -326,14 +326,17 @@ export function generate({
             for (let j = ++i; j < length; ++j) {
               const e = content.emitEntries[j]!;
               for (const [oldRef, newRef] of refIdMap) {
-                e.content = e.content.replaceAll(oldRef, newRef);
+                // Function in replaceAll to avoid issues with `$$` -> `$`
+                e.content = e.content.replaceAll(oldRef, () => newRef);
               }
             }
           }
 
           for (const [oldRef, newRef] of refIdMap) {
-            content.code = content.code.replaceAll(oldRef, newRef);
+            // Function in replaceAll to avoid issues with `$$` -> `$`
+            content.code = content.code.replaceAll(oldRef, () => newRef);
           }
+
           return [{ fromCache: true }, {
             code: content.code,
             moduleSideEffects: content.moduleSideEffects,
@@ -444,7 +447,6 @@ export function generate({
   return [{
     name: PLUGIN_NAME,
     buildStart() {
-      virtualFiles = new VirtualFileManager();
       usedCacheFiles.clear();
       const { watchMode } = this.meta;
       const cacheSubFolder = watchMode ? "watch" : "build";
@@ -481,6 +483,7 @@ export function generate({
         this.error(e);
       }
     },
+    // vite passes an object with options that has ssr
     async load(id): Promise<LoadResult> {
       try {
         const meta = this.getModuleInfo(id)?.meta;
@@ -511,7 +514,7 @@ export function generate({
     name: `${PLUGIN_NAME}:virtual-files`,
     resolveId(source, importer, options) {
       if (virtualFiles.isVirtualFile(source)) {
-        return virtualFiles.resolveVirtualFile(this, source);
+          return virtualFiles.resolveVirtualFile(this, source);
       }
     },
     load(id) {
