@@ -1,8 +1,9 @@
-import { createFilter, type FilterPattern } from "@rollup/pluginutils";
+import { addExtension, createFilter, makeLegalIdentifier, type FilterPattern } from "@rollup/pluginutils";
 import type { LoadResult, Plugin, PluginContext, ResolveIdResult, SourceDescription } from "rollup";
-import { basename, join, dirname } from "node:path";
+import { basename, join, dirname, resolve } from "node:path";
 import * as esbuild from "esbuild";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, stat, readFile, unlink, writeFile } from "node:fs/promises"
+import { ensureDir, exists } from "fs-extra";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { generateAndWriteDts } from "./dtsBundler";
@@ -33,10 +34,31 @@ export interface GenerateOptions {
    */
   dtsBanner?: string;
   /**
-   * Evalualate the generator in a worker
-   * @default false
+   * the path of the cache folder, relative to the project root
+   *
+   * @default "node_modules/.rollup-plugin-generate-cache"
    */
-  useWorker?: boolean;
+  cachePath?: string;
+
+   // * verify: load the cached files right away, and generate a new copy. if they differ, print a warning and trigger a rebuild.
+  /**
+   * cache strategy for generated content
+   *
+   * filesystem: load the files and assume they are correct.
+   * NOTE: this mode will not trigger rebuilds for any files that the generator watches (changes to the generator itself will be tracked)
+   * 
+   * off: disable caching
+   */
+  cache?: {
+    /**
+     * @default "filesystem"
+     */
+    watch?: "filesystem" | "off";
+    /**
+     * @default "off"
+     */
+    build?: "filesystem" | "off";
+  };
 }
 
 const INCLUDE_REGEX = /\.gen\.[mc]?[jt]sx?(?:[&?].+?)?$/;
@@ -70,6 +92,10 @@ export interface EmitFileArgs {
   content: string;
 }
 
+export interface EmitChunkArgs extends Omit<EmitFileArgs, "hasSideEffects"> {
+
+}
+
 /**
  * @internal
  */
@@ -93,7 +119,7 @@ export interface GeneratorArgs {
    * @returns a unique import specifier that references this file
    */
   emitFile(args: EmitFileArgs): string;
-  emitChunk(args: Omit<EmitFileArgs, "hasSideEffects">): string;
+  emitChunk(args: EmitChunkArgs): string;
   /**
    * Starts the debugger, then spins;
    */
@@ -188,14 +214,41 @@ export class VirtualFileManager {
   }
 }
 
+const CURRENT_VERSION = 3;
+
 export function generate({
   exclude,
   esbuildOptions: _esbuildOptions = {},
   emitDts = true,
   dtsBanner = "/* eslint-disable */",
+  cachePath = join("node_modules", ".rollup-plugin-generate-cache"),
+  cache: { watch: watchCacheMode = "filesystem", build: buildCacheMode = "off" } = {},
 }: GenerateOptions = {}): Plugin<GenerateOptions>[] {
   const matcher = createFilter(INCLUDE_REGEX, exclude);
-  const virtualFiles = new VirtualFileManager();
+  let virtualFiles: VirtualFileManager;
+  function _emitFile(args: EmitFileArgs, normalizedId: string): string {
+    const refId = virtualFiles.register(args, normalizedId);
+    return refId;
+  }
+  function _emitChunk(args: EmitChunkArgs, ctx: PluginContext, normalizedId: string): string {
+    const ref = virtualFiles.register(args, normalizedId);
+    const file = virtualFiles.files.get(ref)!;
+    const refId = ctx.emitFile({
+      type: "chunk",
+      id: ref,
+      importer: normalizedId,
+      name: args.nameHint,
+    })
+    virtualFiles.registerEmitFile(refId, {
+      ...file,
+      ref: refId,
+    });
+    return refId;
+  }
+  // files in this list have been loaded from the cache already and should be generated the next time they are requested
+  const usedCacheFiles = new Set<string>();
+  let resolvedCacheDirBase: string;
+  let cacheMode: (GenerateOptions["cache"] & {})[keyof (GenerateOptions["cache"] & {})] & {};
   function getBuildOptions(
     id: string,
   ): Promise<esbuild.BuildOptions> | esbuild.BuildOptions {
@@ -205,17 +258,98 @@ export function generate({
       return _esbuildOptions(id);
     }
   }
-  async function transform(this: PluginContext, id: string): Promise<SourceDescription> {
+  // TODO: store previously generated watched files in cache
+  async function transform(ctx: PluginContext, id: string): Promise<[{ fromCache: boolean; }, SourceDescription]> {
+    interface CachedEmitFile extends EmitFileArgs {
+      refId: string;
+      entryType: "file";
+    }
+    interface CachedEmitChunk extends EmitChunkArgs {
+      refId: string;
+      entryType: "chunk";
+    }
+    type CachedEmitEntry = CachedEmitFile | CachedEmitChunk;
+    interface CacheFile {
+      version: number;
+      code: string;
+      moduleSideEffects: SourceDescription["moduleSideEffects"];
+      emitEntries: CachedEmitEntry[];
+    }
     const tempDir = await mkdtemp(
       join(tmpdir(), `rollup-plugin-${PLUGIN_NAME}.`),
     );
-    const { watchMode } = this.meta;
+    const { watchMode } = ctx.meta;
     const filename = basename(id);
     const dir = dirname(id);
     const outfile = join(tempDir, "file.cjs");
     const providedOptions = await getBuildOptions(id);
     const normalizedId = stripQueryArgs(id);
-    const result = await esbuild.build({
+    const cacheFilePath = join(resolvedCacheDirBase, addExtension(makeLegalIdentifier(normalizedId), ".json"));
+    const usedCacheAlready = usedCacheFiles.has(cacheFilePath);
+    using _ = defer(() => {
+      usedCacheFiles.add(cacheFilePath);
+    });
+    if (watchMode) {
+      // we want to watch the generator input file regardless of the input mode
+      ctx.addWatchFile(normalizedId);
+    } else if (usedCacheAlready) {
+      ctx.error("bug: usedCacheFiles should be empty in build mode");
+    }
+    if (cacheMode === "filesystem") {
+      if (await exists(cacheFilePath)) {
+        if (!(await stat(cacheFilePath)).isFile()) {
+          ctx.error(`cache file path ${cacheFilePath} is not a file`);
+        }
+        const content = JSON.parse(await readFile(cacheFilePath, "utf8")) as CacheFile;
+        // Version mismatch, delete and regenerate
+        if (content.version !== CURRENT_VERSION) {
+          ctx.warn(`cache file version mismatch for ${cacheFilePath}, removing`);
+          await unlink(cacheFilePath);
+        } else {
+          ctx.debug(`cache hit for ${id} at ${cacheFilePath}`);
+          type Old = string;
+          type New = string;
+          const refIdMap = new Map<Old, New>();
+          // register the original emit files/chunks
+          // they need to be registered in the order that they were create 
+          // so later emit entries can reference earlier ones
+          const { length } = content.emitEntries;
+
+          for (let i = 0; i < length;) {
+            const { entryType, refId, ...args } = content.emitEntries[i]!;
+            const newRefId = entryType === "file"
+              ? _emitFile(args as EmitFileArgs, normalizedId)
+              : _emitChunk(args as EmitChunkArgs, ctx, normalizedId);
+
+            refIdMap.set(refId, newRefId);
+
+            for (let j = ++i; j < length; ++j) {
+              const e = content.emitEntries[j]!;
+              for (const [oldRef, newRef] of refIdMap) {
+                e.content = e.content.replaceAll(oldRef, newRef);
+              }
+            }
+          }
+
+          for (const [oldRef, newRef] of refIdMap) {
+            content.code = content.code.replaceAll(oldRef, newRef);
+          }
+          return [{ fromCache: true }, {
+            code: content.code,
+            moduleSideEffects: content.moduleSideEffects,
+          }]
+        }
+      } else {
+        ctx.debug(`cache miss for ${id}`)
+      }
+    }
+    const cacheEntry: CacheFile = {
+      version: CURRENT_VERSION,
+      code: null!,
+      moduleSideEffects: "ERROR: Not generated yet" as never,
+      emitEntries: [],
+    };
+    const buildResult = await esbuild.build({
       sourcemap: "inline",
       sourceRoot: process.platform === "win32" ? "C:\\" : "/",
       ...providedOptions,
@@ -233,13 +367,13 @@ export function generate({
         : {}),
     });
     if (watchMode) {
-      const { metafile } = result;
+      const { metafile } = buildResult;
       if (!metafile) {
-        this.error("ESBuild Metafile is undefined");
+        ctx.error("ESBuild Metafile is undefined");
       }
       const { outputs } = metafile;
       for (const path of Object.keys(outputs)) {
-        this.addWatchFile(path);
+        ctx.addWatchFile(path);
       }
     }
     let requireUrl =
@@ -254,52 +388,73 @@ export function generate({
       !Object.hasOwn(mod, "generate") ||
       typeof mod.generate !== "function"
     ) {
-      this.warn("read the docs for the args passed to the generator function");
-      this.error(`the generator must have a named export "generate"`);
+      ctx.warn("read the docs for the args passed to the generator function");
+      ctx.error(`the generator must have a named export "generate"`);
     }
-    const opts: GeneratorArgs = {
-      error: (msg) => this.error(msg),
-      warn: (msg) => this.warn(msg),
-      info: (msg) => this.info(msg),
-      debug: (msg) => this.debug(msg),
+    const generatorCtx: GeneratorArgs = {
+      error: (msg) => ctx.error(msg),
+      warn: (msg) => ctx.warn(msg),
+      info: (msg) => ctx.info(msg),
+      debug: (msg) => ctx.debug(msg),
       filename,
       dirname: dir,
-      watch: (path) => this.addWatchFile(path),
-      emitFile: (args) => virtualFiles.register(args, stripQueryArgs(id)),
-      emitChunk: (args) => {
-        const ref = virtualFiles.register(args, stripQueryArgs(id));
-        const file = virtualFiles.files.get(ref)!;
-        const emitRef = this.emitFile({
-          type: "chunk",
-          id: ref,
-          importer: stripQueryArgs(id),
-          name: args.nameHint,
-        })
-        virtualFiles.registerEmitFile(emitRef, {
-          ...file,
-          ref: emitRef,
+      watch: (path) => ctx.addWatchFile(path),
+      emitFile: (args) => {
+        const refId = _emitFile(args, normalizedId);
+        cacheEntry.emitEntries.push({
+          ...args,
+          refId,
+          entryType: "file",
         });
-        return emitRef;
+        return refId;
       },
-      inspectBrk,
+      emitChunk: (args) => {
+        const refId = _emitChunk(args, ctx, normalizedId);
+        cacheEntry.emitEntries.push({
+          ...args,
+          refId,
+          entryType: "chunk",
+        });
+        return refId;
+      },
+      inspectBrk: inspectBrk,
     };
     let transformedCode: string;
     let moduleSideEffects: SourceDescription["moduleSideEffects"] = null;
     try {
-      transformedCode = await Promise.resolve(mod.generate(opts));
+      transformedCode = await Promise.resolve(mod.generate(generatorCtx));
       if ("moduleSideEffects" in mod) {
         moduleSideEffects = (mod as any).moduleSideEffects;
       }
     } catch (e) {
       throw new Error(`Failed to generate module ${id}`, { cause: e });
     }
-    return {
+
+    cacheEntry.code = transformedCode;
+    cacheEntry.moduleSideEffects = moduleSideEffects;
+
+    if (cacheMode === "filesystem") {
+      await writeFile(cacheFilePath, JSON.stringify(cacheEntry), "utf8");
+    }
+    return [{ fromCache: false }, {
       code: transformedCode,
       moduleSideEffects,
-    }
+    }]
   }
   return [{
     name: PLUGIN_NAME,
+    buildStart() {
+      virtualFiles = new VirtualFileManager();
+      usedCacheFiles.clear();
+      const { watchMode } = this.meta;
+      const cacheSubFolder = watchMode ? "watch" : "build";
+      resolvedCacheDirBase = resolve(
+        cachePath,
+        cacheSubFolder,
+      )
+      cacheMode = watchMode ? watchCacheMode : buildCacheMode;
+      return ensureDir(resolvedCacheDirBase)
+    },
     async resolveId(source, importer, options) {
       try {
         const strippedSource = stripQueryArgs(source);
@@ -336,24 +491,24 @@ export function generate({
         if (!resolvedId) {
           this.error(`missing resolved id`);
         }
-        const result = await transform.call(this, resolvedId);
-        if (emitDts) {
+        const [{fromCache}, sourceDesc] = await transform(this, resolvedId);
+        if (emitDts && !fromCache) {
           await generateAndWriteDts.call(
             this,
             stripQueryArgs(resolvedId),
-            result.code,
+            sourceDesc.code,
             virtualFiles,
             dtsBanner
           );
         }
-        return result;
+        return sourceDesc;
       } catch (e) {
         this.error(e);
       }
     },
   },
   {
-    name: `${PLUGIN_NAME}-virtual-files`,
+    name: `${PLUGIN_NAME}:virtual-files`,
     resolveId(source, importer, options) {
       if (virtualFiles.isVirtualFile(source)) {
         return virtualFiles.resolveVirtualFile(this, source);
@@ -371,9 +526,22 @@ export function generate({
 function inspectBrk(): void {
   process.kill(process.pid, "SIGUSR1");
   let spinning = true;
+
+  function stopSpinning() {
+    spinning = false;
+  }
+
   while (spinning) {
     if (!(Math.random() || Math.random())) {
-        spinning = false;
+      stopSpinning();
+    }
+  }
+}
+
+function defer(f: () => void): Disposable {
+  return {
+    [Symbol.dispose]() {
+      f();
     }
   }
 }
